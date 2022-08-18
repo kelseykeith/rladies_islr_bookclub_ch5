@@ -1,0 +1,145 @@
+---
+title: "Untitled"
+output: html_document
+date: "2022-08-17"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## RLadies Philly ISLR Ch. 5 Tidymodels Demo
+
+### Set Up
+
+Load and install packages simultaneously with the `librarian` package! This package will load libraries and then if the package is not installed, will check CRAN, then Bioconductor, then GitHub for the package. The downside to this package is that it won't ask before installing packages, so use with others cautiously!
+
+```{r}
+# install the librarian package
+install.packages('librarian')
+
+# load (and install if necessary) the packages for this demo!
+librarian::shelf(tidyverse, tidymodels, MASS)
+```
+
+<br>
+
+### Why Resampling?
+
+![K-fold cross validation example from Wikipedia, CC BY-SA 4.0](K-fold_cross_validation_EN.svg)
+
+
+### Today's Data
+
+We're going to use the `birthwt` data from the `MASS` package and try to predict baby's birthweight's based on the mother's age, `age` and smoking status `smoke`
+
+```{r}
+birthwt %>%
+ggplot(aes(x = age, y = bwt, color = as.factor(smoke))) +
+  geom_point() +
+  geom_hline(yintercept = 2500, linetype = 'dashed', color = 'gray60') +
+  labs(x = "Mother's Age (years)", y = 'Infant Birth Weight (g)',
+       color = 'Smoking Status') +
+  theme_classic(base_size = 16)
+```
+
+So far in ISLR, we've just split our data into training and test sets.
+
+```{r}
+# set the seed so everyone gets the same sample
+set.seed(42)
+
+# Sample data to split into testing and training sets using initial_split():
+# - data = data.frame to saample from 
+# - strata = variable for stratified sampling which means that each group w/i 
+#   the variable will be split in the proportion; important because if we 
+#   randomly didn't sample any Adelie penguins in the training data our 
+#   prediction would not fit the test data well
+# - prop = the proportion of data to be retained for training/modeling/analysis
+birthwt_split <- initial_split(data = birthwt, strata = low, prop = 0.7)
+
+# split the data into testing and training data.frames
+birthwt_train <- training(birthwt_split)
+birthwt_test <- testing(birthwt_split)
+```
+
+Fit a model
+
+```{r}
+# set the engine and mode
+lm_spec <- linear_reg() %>%
+  set_mode("regression") %>%
+  set_engine("lm")
+
+# and fit the model
+lm_fit <- lm_spec %>% 
+  fit(bwt ~ age + smoke, data = birthwt_train)
+```
+
+And then go back and make predictions on both the training and testing datasets to see how well the model describes the data
+
+```{r}
+# training
+augment(lm_fit, new_data = birthwt_train) %>%
+  rmse(truth = bwt, estimate = .pred)
+
+# testing
+augment(lm_fit, new_data = birthwt_test) %>%
+  rmse(truth = bwt, estimate = .pred)
+```
+
+<br>
+
+### k-Fold Cross Validation
+
+Wouldn't it be great if we could train a model, check it on the test data, go back and tweak the model, and check in test data again? This obviously would be model leakage, so we can't do that, BUT we can split the training data up further into training data and validation data!
+
+#### Train the Model
+
+```{r}
+poly_tuned_rec <- recipe(bwt ~ age + smoke, data = birthwt_train) %>%
+  step_poly(age, degree = tune())
+
+poly_tuned_wf <- workflow() %>%
+  add_recipe(poly_tuned_rec) %>%
+  add_model(lm_spec)
+```
+
+```{r}
+set.seed(42)
+birthwt_folds <- vfold_cv(birthwt_train, v = 10)
+```
+
+```{r}
+degree_grid <- grid_regular(degree(range = c(1, 10)), levels = 10)
+```
+
+```{r}
+tune_res <- tune_grid(
+  object = poly_tuned_wf, 
+  resamples = birthwt_folds, 
+  grid = degree_grid)
+```
+
+#### Examine the Results
+
+```{r}
+autoplot(tune_res)
+```
+
+```{r}
+class(autoplot(tune_res))
+
+collect_metrics(tune_res)
+```
+
+```{r}
+best_degree <- select_by_one_std_err(tune_res, degree, metric = "rmse")
+
+final_wf <- finalize_workflow(poly_wf, best_degree)
+
+final_fit <- fit(final_wf, birthwt_train)
+```
+
+
+
