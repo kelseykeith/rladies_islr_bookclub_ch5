@@ -39,6 +39,10 @@ ggplot(aes(x = age, y = bwt, color = as.factor(smoke))) +
   labs(x = "Mother's Age (years)", y = 'Infant Birth Weight (g)',
        color = 'Smoking Status') +
   theme_classic(base_size = 16)
+
+birthwt %>%
+  ggplot(aes(x = bwt)) +
+  geom_histogram()
 ```
 ### Why Resampling?
 
@@ -149,6 +153,8 @@ tune_res <- tune_grid(
   resamples = birthwt_folds, 
   # and the values of the parameters we want to vary
   grid = degree_grid)
+
+tune_res %>% unnest(.metrics)
 ```
 
 #### Examine the Results
@@ -171,7 +177,7 @@ class(autoplot(tune_res))
 collect_metrics(tune_res)
 ```
 
-Now we can extract the 
+Now we can extract the best fitting model
 
 ```{r}
 best_degree <- select_by_one_std_err(tune_res, degree, metric = "rsq")
