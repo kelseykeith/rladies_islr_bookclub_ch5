@@ -10,23 +10,21 @@ knitr::opts_chunk$set(echo = TRUE)
 
 ## RLadies Philly ISLR Ch. 5 Tidymodels Demo
 
+This tutorial is very similar to and bascially walks through the k-fold cross validation section of the ISLR Tidymodels Lab Ch 5 section <https://emilhvitfeldt.github.io/ISLR-tidymodels-labs/05-resampling-methods.html>, so check out, if you haven't already, Emil Hvitfeldt's wonerful labs!
+
 ### Set Up
 
 Load and install packages simultaneously with the `librarian` package! This package will load libraries and then if the package is not installed, will check CRAN, then Bioconductor, then GitHub for the package. The downside to this package is that it won't ask before installing packages, so use with others cautiously!
 
 ```{r}
 # install the librarian package
-install.packages('librarian')
+# install.packages('librarian')
 
 # load (and install if necessary) the packages for this demo!
 librarian::shelf(tidyverse, tidymodels, MASS)
 ```
 
 <br>
-
-### Why Resampling?
-
-![K-fold cross validation example from Wikipedia, CC BY-SA 4.0](K-fold_cross_validation_EN.svg)
 
 
 ### Today's Data
@@ -42,8 +40,11 @@ ggplot(aes(x = age, y = bwt, color = as.factor(smoke))) +
        color = 'Smoking Status') +
   theme_classic(base_size = 16)
 ```
+### Why Resampling?
 
-So far in ISLR, we've just split our data into training and test sets.
+#### The Path So Far
+
+So far in ISLR, we've just (1) split our data into training and test sets.
 
 ```{r}
 # set the seed so everyone gets the same sample
@@ -63,7 +64,7 @@ birthwt_train <- training(birthwt_split)
 birthwt_test <- testing(birthwt_split)
 ```
 
-Fit a model
+(2) Fit a model
 
 ```{r}
 # set the engine and mode
@@ -76,7 +77,7 @@ lm_fit <- lm_spec %>%
   fit(bwt ~ age + smoke, data = birthwt_train)
 ```
 
-And then go back and make predictions on both the training and testing datasets to see how well the model describes the data
+And then (3) go back and make predictions on both the training and testing datasets to see how well the model describes the data
 
 ```{r}
 # training
@@ -88,58 +89,120 @@ augment(lm_fit, new_data = birthwt_test) %>%
   rmse(truth = bwt, estimate = .pred)
 ```
 
+#### Resampling
+
+Wouldn't it be great if we could train a model, check it on the test data, go back and tweak the model, and check in test data again? This obviously would be model leakage, so we can't do that, BUT we can split the training data up further into training data and validation data! This is resampling. There are several different ways of resampling that ISLR discusses and they all have tradeoffs between bias and variance:
+
+- One set of test and validation sets
+- K-fold cross validation
+- Leave one out cross validation
+- bootstrapping
+
+![K-fold cross validation example from Wikipedia, CC BY-SA 4.0](K-fold_cross_validation_EN.svg)
+
 <br>
 
 ### k-Fold Cross Validation
 
-Wouldn't it be great if we could train a model, check it on the test data, go back and tweak the model, and check in test data again? This obviously would be model leakage, so we can't do that, BUT we can split the training data up further into training data and validation data!
-
-#### Train the Model
+Now, like when we split our data into testing and training data, we need to further split our data into the number of folds we want to test on. Here, I went with 10, which is a default that's been shown to increase accuracy while keeping variance and bias small. If your dataset is small however, you'll want to do less folds.
 
 ```{r}
-poly_tuned_rec <- recipe(bwt ~ age + smoke, data = birthwt_train) %>%
-  step_poly(age, degree = tune())
-
-poly_tuned_wf <- workflow() %>%
-  add_recipe(poly_tuned_rec) %>%
-  add_model(lm_spec)
-```
-
-```{r}
+# set the seed so we get the same folds
 set.seed(42)
+# find the folds with vfold_cv() which takes a data.frame and the number of folds
+# you want
 birthwt_folds <- vfold_cv(birthwt_train, v = 10)
 ```
 
+#### Train the Model
+
+Our simple linear model doesn't give a great prediction, but maybe there's a higher-order model that fits the mother's age better like a cubic (x^3) or a multinomial linear model (x^n). We'll try fitting progressively higher order models for something to demonstrate on how k-fold cross validation works
+
 ```{r}
+### make our recipe
+# recipe() contains the same model we fit before
+poly_tuned_rec <- recipe(bwt ~ age + smoke, data = birthwt_train) %>%
+# step_poly() will let us increase the degree of the model by 1
+  step_poly(age, degree = tune())
+
+### make a workflow with our recipe and model
+# so we're going to start with our base linear model, add_model() and then keep
+# increasing the degrees of the model, add_recipe()
+poly_tuned_wf <- workflow() %>%
+  add_recipe(poly_tuned_rec) %>%
+  add_model(lm_spec)
+
+### make the parameters you want 
+# a data.frame with the parameters you want to vary
+# ours only has one column because we're just testing one parameter, but you
+# can have many different parameters you're testing
 degree_grid <- grid_regular(degree(range = c(1, 10)), levels = 10)
 ```
 
+Run the tests! We our workflow/recipe/model, `poly_tuned_wf`, the folds we want to test the model on, `birthwt_folds` and the parameters we want to test, `degree_grid`.
+
 ```{r}
 tune_res <- tune_grid(
+  # workflow with the model and the parameters we want to test
   object = poly_tuned_wf, 
+  # our 10 resamples
   resamples = birthwt_folds, 
+  # and the values of the parameters we want to vary
   grid = degree_grid)
 ```
 
 #### Examine the Results
 
+We want to see what the error is for our models at each degree! We can use the `autoplot()` function from the `tune` package to visualize our parameter we tested vs the root mean squared error (RMSE) and the R^2 goodness-of-fit (rsq).
+
+As we can see from the plot, raising the degree did not improve the fit. The RMSE is flat until we get to much higher degrees, probably due to overfitting. The R^2 is highest at 1-2 degrees.
+
 ```{r}
-autoplot(tune_res)
+tune::autoplot(tune_res)
 ```
 
+If you want to futher refine how this plot looks, the plot is a `ggplot`, so you can modify its appearance using all the many `ggplot` options OR you can get the values needed with the `collect_metrics()` function.
+
 ```{r}
+# it's a ggplot so you can modify with other ggplot options
 class(autoplot(tune_res))
 
+# or get the values and plot yourself
 collect_metrics(tune_res)
 ```
 
-```{r}
-best_degree <- select_by_one_std_err(tune_res, degree, metric = "rmse")
+Now we can extract the 
 
-final_wf <- finalize_workflow(poly_wf, best_degree)
+```{r}
+best_degree <- select_by_one_std_err(tune_res, degree, metric = "rsq")
+
+final_wf <- finalize_workflow(poly_tuned_wf, best_degree)
 
 final_fit <- fit(final_wf, birthwt_train)
 ```
 
+```{r}
+### original simple linear model
+augment(lm_fit, new_data = birthwt_train) %>%
+  rmse(truth = bwt, estimate = .pred) %>%
+  mutate(set = 'original_train') -> train_orig
 
+# testing
+augment(lm_fit, new_data = birthwt_test) %>%
+  rmse(truth = bwt, estimate = .pred) %>%
+  mutate(set = 'original_test') -> test_orig
+
+### cross validation model
+# training
+augment(final_fit, new_data = birthwt_train) %>%
+  rmse(truth = bwt, estimate = .pred) %>%
+  mutate(set = 'kfold_train') -> train_kfold
+
+# testing
+augment(final_fit, new_data = birthwt_test) %>%
+  rmse(truth = bwt, estimate = .pred) %>%
+  mutate(set = 'kfold_test') -> test_kfold
+
+rbind(train_orig, test_orig, train_kfold, test_kfold)
+```
 
